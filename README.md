@@ -15,7 +15,7 @@ Unofficial OmniAuth strategy to authenticate with [Rocket Chat](https://rocket.c
 Add this line to your application's Gemfile:
 
 ```ruby
-gem 'omniauth-rocket-chat'
+gem 'omniauth-rocketchat'
 ```
 
 Then execute `bundle install`.
@@ -28,7 +28,7 @@ You need to register your application with your Rocket Chat instance to obtain t
 * Go to `Administration` -> `Third-party login`.
 * Click on `New Application`.
   * Check the `Active` checkbox.
-  * Fill in the `Application Name` and `Redirect URL`. The redirect URL for devise looks like `https://example.com/users/auth/rocket_chat/callback`. You can add multiple hosts by separating them with a comma.
+  * Fill in the `Application Name` and `Redirect URL`. The redirect URL for devise looks like `https://example.com/users/auth/rocketchat/callback`. You can add multiple hosts by separating them with a comma.
   * Click on `Save`.
 * Select the third-party login you just created.
   * Copy the `Client ID` and `Client Secret`.
