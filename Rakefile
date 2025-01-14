@@ -5,7 +5,7 @@ require "rspec/core/rake_task"
 
 RSpec::Core::RakeTask.new
 
-task :test => :spec
+task test: :spec
 
 begin
   require "rubocop/rake_task"
@@ -16,4 +16,4 @@ rescue LoadError
   end
 end
 
-task :default => %i[spec rubocop]
+task default: %i[spec rubocop]

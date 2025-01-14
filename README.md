@@ -5,7 +5,7 @@
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)][contributing]
 
 [gem]: https://rubygems.org/gems/omniauth-rocketchat
-[license]: LICENSE
+[license]: LICENSE.md
 [contributing]: CODE_OF_CONDUCT.md
 
 Unofficial OmniAuth strategy to authenticate with [Rocket Chat](https://rocket.chat/) through OAuth2 in [OmniAuth](https://github.com/omniauth/omniauth).
@@ -108,6 +108,4 @@ Bug reports and pull requests are welcome on the [GitHub project page](https://g
 ## License
 
 Copyright &copy; 2024 David Uhlig. See [LICENSE][] for details.
-
-[license]: LICENSE
 

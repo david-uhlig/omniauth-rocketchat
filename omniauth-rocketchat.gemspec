@@ -12,7 +12,7 @@ Gem::Specification.new do |gem|
   gem.summary       = "An unofficial Rocket Chat OAuth2 strategy."
   gem.description   = 'Allows your application to integrate with Rocket Chat through their "Third-party login" feature.'
 
-  gem.authors       = ["David Uhlig"]
+  gem.authors       = [ "David Uhlig" ]
   gem.email         = "david.uhlig@gmail.com"
   gem.homepage      = "https://github.com/david-uhlig/omniauth-rocketchat"
 
@@ -27,7 +27,7 @@ Gem::Specification.new do |gem|
   gem.add_runtime_dependency 'omniauth-oauth2', '~> 1.8'
 
   gem.add_development_dependency "rake", "~> 13.0"
-  gem.add_development_dependency "rubocop", "~> 1.0"
+  gem.add_development_dependency "rubocop", "~> 1.70"
   gem.add_development_dependency "rspec", "~> 3.8"
   gem.add_development_dependency "simplecov", "~> 0.16"
 
