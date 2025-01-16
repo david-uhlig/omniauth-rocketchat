@@ -107,5 +107,5 @@ Bug reports and pull requests are welcome on the [GitHub project page](https://g
 
 ## License
 
-Copyright &copy; 2024 David Uhlig. See [LICENSE][] for details.
+Copyright &copy; 2024-2025 David Uhlig. See [LICENSE][] for details.
 

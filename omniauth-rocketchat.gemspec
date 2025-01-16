@@ -16,6 +16,11 @@ Gem::Specification.new do |gem|
   gem.email         = "david.uhlig@gmail.com"
   gem.homepage      = "https://github.com/david-uhlig/omniauth-rocketchat"
 
+  gem.metadata      = {
+    "homepage_uri" => gem.homepage,
+    "source_code_uri" => gem.homepage
+  }
+
   gem.files         = `git ls-files -z`.split("\x0").reject { |f| f.start_with?('spec/') }
   gem.require_paths = %w[lib]
 
@@ -28,6 +33,9 @@ Gem::Specification.new do |gem|
 
   gem.add_development_dependency "rake", "~> 13.0"
   gem.add_development_dependency "rubocop", "~> 1.70"
+  gem.add_development_dependency "rubocop-performance", "~> 1.23"
+  gem.add_development_dependency "rubocop-rspec", "~> 2.0"
+  gem.add_development_dependency "rubocop-rails-omakase", "~> 1.0"
   gem.add_development_dependency "rspec", "~> 3.8"
   gem.add_development_dependency "simplecov", "~> 0.16"
 
