@@ -2,9 +2,8 @@ name: Tests and Linting
 
 on:
   push:
-    branches:
-      - main
-  pull_request:
+    branches-ignore:
+      - 'dependabot/**'
   workflow_dispatch:
 
 permissions:
