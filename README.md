@@ -1,14 +1,36 @@
-# OmniAuth Rocket Chat OAuth2 Strategy
+[Rocket Chat]: https://rocket.chat/
+[OmniAuth]: https://github.com/omniauth/omniauth
+[gem]: https://rubygems.org/gems/omniauth-rocketchat
+[license]: LICENSE.md
+[contributing]: CODE_OF_CONDUCT.md
+
+# 🔓 OmniAuth Rocket Chat
 
 [![Gem Version](http://img.shields.io/gem/v/omniauth-rocketchat.svg)][gem]
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)][license]
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)][contributing]
 
-[gem]: https://rubygems.org/gems/omniauth-rocketchat
-[license]: LICENSE.md
-[contributing]: CODE_OF_CONDUCT.md
+## 🚀 Authenticate with Rocket Chat in your Ruby applications
 
-Unofficial OmniAuth strategy to authenticate with [Rocket Chat](https://rocket.chat/) through OAuth2 in [OmniAuth](https://github.com/omniauth/omniauth).
+This unofficial [OmniAuth] strategy allows your application's users to authenticate with [Rocket Chat] as the identity provider (aka social login).
+
+## Requirements
+
+* Ruby `>= 3.2.0`.
+* Rocket Chat `<= 7.4.0` (EOL) or `>= 8.0.0`. See [Compatibility](#compatibility) below.
+
+### Compatibility
+
+Rocket.Chat version 7.4.0 [introduced a bug](https://github.com/RocketChat/Rocket.Chat/issues/35419) that breaks third-party logins. A [partial fix](https://github.com/RocketChat/Rocket.Chat/pull/37707) is available starting in version 8.0.0, but PKCE flows remain affected. Until this is fully resolved, set `pkce: false` in the configurations below.
+
+#### Compatibility Matrix
+
+Excluding EOL versions:
+
+| Rocket Chat Version | `pkce: false`      | `pkce: true` |
+|---------------------|--------------------|--------------|
+| `>= 7.10.x`         | :x:                | :x:          |
+| `>= 8.0.x`          | :white_check_mark: | :x:          |
 
 ## Installation
 
@@ -20,80 +42,139 @@ gem 'omniauth-rocketchat'
 
 Then execute `bundle install`.
 
-## Rocket Chat Setup
+## Configuration
 
-You need to register your application with your Rocket Chat instance to obtain the `Client ID` and `Client Secret`. You will also need to add this applications host(s). This whitelists your application for the callback redirect. You can do this by following the steps below:
+> [!NOTE]
+> Rocket Chat doesn't support `scopes`. Users grant you full permissions to their account. Handle responsibly!
 
-* Go to your Rocket Chat instance and login as an administrator.
-* Go to `Administration` -> `Third-party login`.
-* Click on `New Application`.
-  * Check the `Active` checkbox.
-  * Fill in the `Application Name` and `Redirect URL`. The redirect URL for devise looks like `https://example.com/users/auth/rocketchat/callback`. You can add multiple hosts by separating them with a comma.
-  * Click on `Save`.
-* Select the third-party login you just created.
-  * Copy the `Client ID` and `Client Secret`.
+### Rocket Chat
 
-## Integration
+To enable third-party login, register your application in Rocket Chat to obtain the `Client ID` and `Client Secret`. Add your application's host(s) to whitelist callback redirects by following these steps:
 
-Pick one of the following methods to integrate the strategy with your application.
+1. Log in to your Rocket Chat instance as an administrator.
+2. Navigate to Administration > Third-party login (e.g., https://example.com/admin/third-party-login).
+3. Click New Application:
+   * Enable the Active checkbox.
+   * Enter an Application Name and Redirect URL (e.g., https://example.com/users/auth/rocketchat/callback for Devise).
+   * Click Save.
+4. Select your new application and copy the `Client ID` and `Client Secret`.
 
-### Basic Usage
+### Ruby Integration
+
+Choose one of the following methods to integrate the strategy with your Ruby application.
+
+#### Required Options
     
 ```ruby
 use OmniAuth::Builder do
-  provider :rocketchat,
-  ENV["ROCKETCHAT_CLIENT_ID"],
-  ENV["ROCKETCHAT_CLIENT_SECRET"],
-  client_options: {
-    site: "https://example.com"
-  }
+  provider(
+    :rocketchat, 
+    ENV["CLIENT_ID"],
+    ENV["CLIENT_SECRET"], 
+    pkce: false,
+    client_options: {
+      site: "https://example.com"
+    }
+  )
 end
 ```
 
-### With Custom Endpoints
+#### Custom Endpoints
+
+If you modified the endpoint URL's in Rocket Chat, set `authorize_url` and `token_url`.
+
 ```ruby
 use OmniAuth::Builder do
-  provider :rocketchat,
-  ENV["ROCKETCHAT_CLIENT_ID"],
-  ENV["ROCKETCHAT_CLIENT_SECRET"],
-  client_options: {
-    site: "https://example.com",
-    authorize_url: "/custom/oauth/authorize",
-    token_url: "/custom/oauth/token"
-  }
+  provider(
+    :rocketchat,
+    ENV["CLIENT_ID"],
+    ENV["CLIENT_SECRET"],
+    pkce: false,
+    client_options: {
+      site: "https://example.com",
+      authorize_url: "/custom/oauth/authorize",
+      token_url: "/custom/oauth/token"
+    }
+  )
 end
 ```
 
-### In Rails
+#### Custom Identifier
+
+Set the `name` option to distinguish between multiple Rocket Chat instances. It appears in the OmniAuth auth hash `request.env["omniauth.auth"]` under the `provider` key.
+
+```ruby
+use OmniAuth::Build do
+  provider(
+    :rocketchat,
+    ENV["CLIENT_ID"],
+    ENV["CLIENT_SECRET"],
+    name: :some_other_name,
+    pkce: false,           
+    client_options: {
+      site: "https://example.com"
+    }
+  )
+end
+```
+
+### Rails Integration
+
+Choose one of the following methods to integrate the strategy with your Ruby on Rails application. The [Custom Endpoints](#custom-endpoints) and [Identifier](#custom-identifier) options apply here as well.
+
+#### General
+
 ```ruby
 # config/initializers/rocketchat.rb
 Rails.application.config.middleware.use OmniAuth::Builder do
-  provider :rocketchat,
-  ENV["ROCKETCHAT_CLIENT_ID"],
-  ENV["ROCKETCHAT_CLIENT_SECRET"],
-  client_options: {
-    site: "https://example.com"
-  }
+  provider(
+    :rocketchat,
+    ENV["CLIENT_ID"],
+    ENV["CLIENT_SECRET"],
+    pkce: false,           
+    client_options: {
+      site: "https://example.com"
+    }
+  )
 end
 ```
 
-### With Devise
+#### When using Devise
+
+Use this integration if you use Devise with the `:omniauthable` module.
+
 ```ruby
 # config/initializers/rocketchat.rb
 Devise.setup do |config|
-  config.omniauth :rocketchat,
-  ENV["ROCKETCHAT_CLIENT_ID"],
-  ENV["ROCKETCHAT_CLIENT_SECRET"],
-  client_options: {
-    site: "https://example.com"
-  }
+  config.omniauth(
+    :rocketchat,
+    ENV["CLIENT_ID"],
+    ENV["CLIENT_SECRET"],
+    pkce: false,
+    client_options: {
+      site: "https://example.com"
+    }
+  )
 end
 ```
 
-## Configuration
+## Auth Hash Schema
 
-* The `client_options` options: `authorize_url` and `token_url` are optional and default to `/oauth/authorize` and `/oauth/token` respectively.
-* `scope` has no effect on Rocket Chat. Users grant you full permissions to their account. Handle responsibly!
+### User Info
+
+This strategy returns information about the authenticated user in the [Auth Hash Schema 1.0+](https://github.com/omniauth/omniauth/wiki/Auth-Hash-Schema). The following information is available in the `info` hash:
+
+* `name`: The user's full name.
+* `nickname`: The user's Rocket Chat username.
+* `email`: The user's email address. The strategy prioritizes verified email addresses but will fall back to the first available one if no verified address is found.
+* `email_verified`: A boolean indicating whether the email address has been verified on the Rocket Chat instance.
+* `image`: The URL to the user's avatar.
+
+You can find the complete profile information returned by Rocket Chat in `extra.raw_info`.
+
+### Credentials
+
+Rocket Chat also returns access and refresh tokens along with other information in the `credentials` hash.
 
 ## Versioning
 
@@ -107,5 +188,5 @@ Bug reports and pull requests are welcome on the [GitHub project page](https://g
 
 ## License
 
-Copyright &copy; 2024-2025 David Uhlig. See [LICENSE][] for details.
+Copyright &copy; 2024-2026 David Uhlig. See [LICENSE][] for details.
 
