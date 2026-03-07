@@ -5,6 +5,10 @@ ruby = "3.2"
 description = "Run `rake standard`"
 run = "rake standard"
 
+[tasks."rake:standard:fix"]
+description = "Run `rake standard:fix`"
+run = "rake standard:fix"
+
 [tasks."rake:spec"]
 description = "Run `rake spec`"
 run = "rake spec"

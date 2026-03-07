@@ -56,6 +56,9 @@ module OmniAuth
     #                     }
     #   end
     class RocketChat < OmniAuth::Strategies::OAuth2
+      # Returns profile information about the authenticated user.
+      # @see https://developer.rocket.chat/apidocs/get-profile-information
+      PROFILE_INFO_ENDPOINT = "/api/v1/me"
       DEFAULT_AUTHORIZE_URL = "/oauth/authorize"
       DEFAULT_TOKEN_URL = "/oauth/token"
 
@@ -71,45 +74,47 @@ module OmniAuth
       option :pkce, true
 
       uid do
-        raw_info["_id"]
+        profile["_id"]
       end
 
-      # Most commonly used info from the +/api/v1/me+ endpoint.
+      # User info from the +/api/v1/me+ endpoint according to the OmniAuth Auth Hash.
       #
-      # +info.email+ returns +nil+ if the user has no confirmed email address.
-      # If email confirmation is disabled on the Rocket Chat instance, the email
-      # will never be confirmed.
+      # Note: If email confirmation is disabled on the Rocket Chat instance,
+      # the email will never be confirmed, i.e. `email_verified` will always be `false`.
       #
       # You may want to handle the +extra.raw_info.emails+ array in this case.
-      # It contains all email addresses associated with the user. Confirmed and
-      # unconfirmed.
+      # It contains all email addresses associated with the user. Verified and unverified.
       info do
         {
-          email: raw_info["email"],
-          active: raw_info["active"],
-          roles: raw_info["roles"],
-          name: raw_info["name"],
-          username: raw_info["username"],
-          avatar: {
-            url: raw_info["avatar_url"],
-            e_tag: raw_info["avatar_e_tag"],
-            origin: raw_info["avatar_origin"]
-          }
+          name: profile["name"],
+          email: email["address"],
+          email_verified: email["verified"],
+          nickname: profile["username"],
+          image: profile["avatar_url"]
         }
       end
 
       extra do
         {
-          raw_info: raw_info
+          raw_info: profile
         }
-      end
-
-      def raw_info
-        @raw_info ||= access_token.get("/api/v1/me").parsed
       end
 
       def callback_url
         full_host + callback_path
+      end
+
+      private
+
+      def profile
+        @profile ||= access_token.get(PROFILE_INFO_ENDPOINT).parsed
+      end
+
+      def email
+        @email ||=
+          profile["emails"].find { |email| email["verified"] } ||
+          profile["emails"].first ||
+          {"address" => nil, "verified" => false}
       end
     end
   end
