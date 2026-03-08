@@ -2,7 +2,7 @@
 
 Follow this guide to upgrade your OmniAuth Rocket Chat Strategy to the next version
 
-## Version 0.2
+## Version 0.2.x
 
 This version introduces breaking changes that may require your attention.
 
