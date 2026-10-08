@@ -17,20 +17,19 @@ This unofficial [OmniAuth] strategy allows your application's users to authentic
 ## Requirements
 
 * Ruby `>= 3.2.0`.
-* Rocket Chat `<= 7.4.0` (EOL) or `>= 8.0.0`. See [Compatibility](#compatibility) below.
+* Rocket Chat `>= 8.2.0`. See [Compatibility](#compatibility) below.
 
 ### Compatibility
 
-Rocket.Chat version 7.4.0 [introduced a bug](https://github.com/RocketChat/Rocket.Chat/issues/35419) that breaks third-party logins. A [partial fix](https://github.com/RocketChat/Rocket.Chat/pull/37707) is available starting in version 8.0.0, but PKCE flows remain affected. Until this is fully resolved, set `pkce: false` in the configurations below.
+Rocket Chat [doesn't store the PKCE code challenge](https://github.com/RocketChat/Rocket.Chat/issues/39459), so the token exchange fails with `Invalid grant: code verifier is invalid`. Until this is resolved, set `pkce: false` in the configurations below.
 
 #### Compatibility Matrix
 
-Excluding EOL versions:
-
 | Rocket Chat Version | `pkce: false`      | `pkce: true` |
 |---------------------|--------------------|--------------|
-| `>= 7.10.x`         | :x:                | :x:          |
-| `>= 8.0.x`          | :white_check_mark: | :x:          |
+| `>= 8.2.0`          | :white_check_mark: | :x:          |
+
+Versions below 8.2.0 are EOL and not supported. Use [`bin/compat`](#compatibility-check) to check a specific version.
 
 ## Installation
 
@@ -175,6 +174,31 @@ You can find the complete profile information returned by Rocket Chat in `extra.
 ### Credentials
 
 Rocket Chat also returns access and refresh tokens along with other information in the `credentials` hash.
+
+## Development
+
+After checking out the repo, run `bin/setup` to install dependencies. Then run `bundle exec rake` to run the specs and the linter.
+
+### Compatibility Check
+
+`bin/compat` runs the full OAuth flow against real Rocket Chat instances: request phase, user consent, token exchange, and profile fetch. It tests both `pkce: true` and `pkce: false`, and prints a compatibility matrix. It exits non-zero if any flow fails.
+
+By default, it starts throwaway Docker containers (MongoDB and Rocket Chat) for each version you pass. It removes them afterwards. Versions are [`rocketchat/rocket.chat`](https://hub.docker.com/r/rocketchat/rocket.chat/tags) image tags. Docker is required.
+
+```sh
+bin/compat 8.9.0              # a single version
+bin/compat 8.2.0 8.9.0        # several versions, one matrix
+bin/compat --keep 8.9.0       # keep the containers running for debugging
+bin/compat --mongo mongo:7.0 8.2.0  # use another MongoDB image (default: mongo:8.2)
+```
+
+You can also test against an existing instance. The user needs permission to manage OAuth apps:
+
+```sh
+ROCKETCHAT_PASSWORD=secret bin/compat --site https://chat.example.com --user admin
+```
+
+The script registers a temporary OAuth app with the redirect URL `http://localhost:4567/auth/rocketchat/callback` and deletes it afterwards. Run `bin/compat --help` for all options.
 
 ## Versioning
 

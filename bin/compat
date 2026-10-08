@@ -1,0 +1,296 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# End-to-end compatibility check of this strategy against real Rocket Chat
+# instances. Runs the full OAuth flow (request phase, user consent, callback and
+# token exchange, profile fetch) with `pkce: true` and `pkce: false` and prints
+# a compatibility matrix.
+#
+# Usage:
+#   bin/compat 8.9.0 7.3.0          # throwaway Docker containers per version
+#   bin/compat --site https://chat.example.com --user admin --password secret
+#
+# Run `bin/compat --help` for all options.
+
+require "bundler/setup"
+require "omniauth-rocketchat"
+require "json"
+require "logger"
+require "net/http"
+require "optparse"
+require "securerandom"
+require "socket"
+require "uri"
+
+module Compat
+  ADMIN_USER = "compat-admin"
+  ADMIN_PASSWORD = "Compat-#{SecureRandom.hex(8)}!"
+  CALLBACK_HOST = "http://localhost:4567"
+  CALLBACK_PATH = "/auth/rocketchat/callback"
+
+  Result = Struct.new(:target, :pkce, :ok, :detail)
+
+  class Error < StandardError; end
+
+  # Starts MongoDB and Rocket Chat containers on a private network.
+  class DockerInstance
+    attr_reader :site
+
+    def initialize(version, mongo_image:, timeout:, keep:)
+      @version = version
+      @mongo_image = mongo_image
+      @timeout = timeout
+      @keep = keep
+      @prefix = "omniauth-rc-compat-#{version.tr(".", "-")}-#{SecureRandom.hex(3)}"
+    end
+
+    def start
+      port = free_port
+      @site = "http://localhost:#{port}"
+      mongo = "#{@prefix}-mongo"
+
+      sh "docker", "network", "create", network
+      sh "docker", "run", "-d", "--name", mongo, "--network", network,
+        @mongo_image, "--replSet", "rs0", "--bind_ip_all"
+      wait_for("MongoDB") do
+        system("docker", "exec", mongo, "mongosh", "--quiet", "--eval", "db.runCommand({ping: 1})",
+          out: File::NULL, err: File::NULL)
+      end
+      sh "docker", "exec", mongo, "mongosh", "--quiet", "--eval",
+        %(rs.initiate({_id: "rs0", members: [{_id: 0, host: "#{mongo}:27017"}]}))
+
+      sh "docker", "run", "-d", "--name", app, "--network", network,
+        "-p", "127.0.0.1:#{port}:3000",
+        "-e", "ROOT_URL=#{@site}", "-e", "PORT=3000",
+        "-e", "MONGO_URL=mongodb://#{mongo}:27017/rocketchat?replicaSet=rs0",
+        "-e", "MONGO_OPLOG_URL=mongodb://#{mongo}:27017/local?replicaSet=rs0",
+        "-e", "OVERWRITE_SETTING_Show_Setup_Wizard=completed",
+        "-e", "ADMIN_USERNAME=#{ADMIN_USER}", "-e", "ADMIN_PASS=#{ADMIN_PASSWORD}",
+        "-e", "ADMIN_EMAIL=#{ADMIN_USER}@example.com",
+        "rocketchat/rocket.chat:#{@version}"
+      wait_for_app
+
+      # On first boot against an empty database, some versions (e.g. 7.x) re-create
+      # their REST API after the OAuth auth method was registered, so OAuth access
+      # tokens are rejected until the next restart. Restart once, like a real
+      # deployment that has been booted before.
+      sh "docker", "restart", app
+      wait_for_app
+      self
+    end
+
+    def stop
+      if @keep
+        Compat.log "Keeping containers #{@prefix}-* (#{@site}, #{ADMIN_USER} / #{ADMIN_PASSWORD})"
+        return
+      end
+      %w[app mongo].each { |c| system("docker", "rm", "-f", "#{@prefix}-#{c}", out: File::NULL, err: File::NULL) }
+      system("docker", "network", "rm", network, out: File::NULL, err: File::NULL)
+    end
+
+    private
+
+    def app = "#{@prefix}-app"
+
+    def network = @prefix
+
+    def free_port
+      server = TCPServer.new("127.0.0.1", 0)
+      server.addr[1]
+    ensure
+      server&.close
+    end
+
+    def wait_for_app
+      wait_for("Rocket Chat #{@version}") do
+        abort_if_exited
+        Net::HTTP.get_response(URI("#{@site}/api/info")).is_a?(Net::HTTPSuccess)
+      rescue SystemCallError, IOError
+        false
+      end
+    end
+
+    def abort_if_exited
+      running = `docker inspect -f '{{.State.Running}}' #{app} 2>/dev/null`.strip
+      return if running == "true"
+
+      raise Error, "Rocket Chat container exited:\n#{`docker logs --tail 20 #{app} 2>&1`}"
+    end
+
+    def wait_for(what)
+      Compat.log "Waiting for #{what}..."
+      deadline = Time.now + @timeout
+      until yield
+        raise Error, "Timed out after #{@timeout}s waiting for #{what}" if Time.now > deadline
+
+        sleep 3
+      end
+    end
+
+    def sh(*cmd)
+      out = IO.popen(cmd, err: [:child, :out], &:read)
+      raise Error, "Command failed: #{cmd.join(" ")}\n#{out}" unless $?.success?
+
+      out
+    end
+  end
+
+  # Drives the OAuth flow through the strategy against a running instance.
+  class Flow
+    def initialize(site, user:, password:)
+      @site = site.chomp("/")
+      @user = user
+      @password = password
+    end
+
+    def run(pkce:)
+      oauth_app = create_oauth_app
+      site = @site
+      auth = nil
+      endpoint = lambda do |env|
+        auth = env["omniauth.auth"]
+        [200, {}, ["ok"]]
+      end
+      rack_app = OmniAuth::Builder.new(endpoint) do
+        provider :rocketchat, oauth_app["clientId"], oauth_app["clientSecret"],
+          pkce: pkce, client_options: {site: site}
+      end
+      session = {}
+      mock = Rack::MockRequest.new(rack_app)
+
+      # 1. Request phase: the strategy redirects to Rocket Chat
+      res = mock.post("/auth/rocketchat", "rack.session" => session)
+      authorize_url = URI(res.headers["location"])
+
+      # 2. Consent: what Rocket Chat's "authorize" page submits when the user clicks "Authorize"
+      params = URI.decode_www_form(authorize_url.query).to_h
+      res = Net::HTTP.post_form(URI("#{@site}/oauth/authorize?#{authorize_url.query}"),
+        params.merge("allow" => "yes", "token" => login["authToken"]))
+      location = res["location"].to_s
+      unless location.start_with?(CALLBACK_HOST + CALLBACK_PATH)
+        return [false, "authorize: HTTP #{res.code} #{location.empty? ? res.body.to_s[0, 200] : location}"]
+      end
+
+      # 3. Callback: token exchange and profile fetch
+      res = mock.get("#{CALLBACK_PATH}?#{URI(location).query}", "rack.session" => session)
+      return [false, "callback: #{res.body}"] unless res.status == 200 && auth
+
+      [true, "uid=#{auth.uid} nickname=#{auth.info.nickname}"]
+    ensure
+      delete_oauth_app(oauth_app) if oauth_app
+    end
+
+    private
+
+    def login
+      @login ||= begin
+        res = api(:post, "/api/v1/login", {user: @user, password: @password}, auth: false)
+        res.fetch("data") { raise Error, "Login failed: #{res}" }
+      end
+    end
+
+    def create_oauth_app
+      res = api(:post, "/api/v1/oauth-apps.create",
+        {name: "omniauth-compat-#{SecureRandom.hex(4)}", active: true, redirectUri: CALLBACK_HOST + CALLBACK_PATH})
+      res.fetch("application") { raise Error, "Creating OAuth app failed: #{res}" }
+    end
+
+    def delete_oauth_app(oauth_app)
+      api(:post, "/api/v1/oauth-apps.delete", {appId: oauth_app["_id"]})
+    rescue
+      nil # best effort
+    end
+
+    def api(method, path, body, auth: true)
+      uri = URI(@site + path)
+      req = Net::HTTP.const_get(method.capitalize).new(uri, "Content-Type" => "application/json")
+      if auth
+        req["X-Auth-Token"] = login["authToken"]
+        req["X-User-Id"] = login["userId"]
+      end
+      req.body = body.to_json
+      res = Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https") { |http| http.request(req) }
+      JSON.parse(res.body)
+    rescue JSON::ParserError
+      raise Error, "#{path}: HTTP #{res.code} #{res.body.to_s[0, 200]}"
+    end
+  end
+
+  def self.log(msg) = warn("==> #{msg}")
+
+  def self.run_flows(target, flow)
+    [true, false].map do |pkce|
+      ok, detail = flow.run(pkce: pkce)
+      Result.new(target, pkce, ok, detail)
+    rescue => e
+      Result.new(target, pkce, false, "#{e.class}: #{e.message}")
+    end
+  end
+
+  def self.print_matrix(results)
+    puts
+    puts "| Rocket Chat | `pkce: true` | `pkce: false` |"
+    puts "|-------------|--------------|---------------|"
+    results.group_by(&:target).each do |target, rows|
+      by_pkce = rows.to_h { |r| [r.pkce, r.ok ? ":white_check_mark:" : ":x:"] }
+      puts "| `#{target}` | #{by_pkce[true]} | #{by_pkce[false]} |"
+    end
+    puts
+    results.each { |r| puts "#{r.target} pkce=#{r.pkce}: #{r.ok ? "OK" : "FAIL"} - #{r.detail}" }
+  end
+
+  def self.main(argv)
+    opts = {mongo_image: "mongo:8.2", timeout: 300, keep: false}
+    parser = OptionParser.new do |o|
+      o.banner = "Usage: bin/compat [options] VERSION [VERSION...]\n" \
+                 "       bin/compat --site URL --user USER --password PASSWORD"
+      o.separator ""
+      o.separator "Docker mode (default): starts throwaway containers for each rocketchat/rocket.chat image tag."
+      o.on("--mongo IMAGE", "MongoDB image (default: #{opts[:mongo_image]}). Older Rocket Chat versions may need an older one.") { opts[:mongo_image] = _1 }
+      o.on("--timeout SECONDS", Integer, "Startup timeout per container (default: #{opts[:timeout]})") { opts[:timeout] = _1 }
+      o.on("--keep", "Keep containers running after the test") { opts[:keep] = true }
+      o.separator ""
+      o.separator "Existing instance mode: the user needs permission to manage OAuth apps."
+      o.on("--site URL", "Rocket Chat base URL") { opts[:site] = _1 }
+      o.on("--user USER", "Username") { opts[:user] = _1 }
+      o.on("--password PASSWORD", "Password (or ROCKETCHAT_PASSWORD env var)") { opts[:password] = _1 }
+      o.separator ""
+      o.separator "The OAuth app is registered with redirect URL #{CALLBACK_HOST}#{CALLBACK_PATH} and deleted afterwards."
+      o.separator "Exits non-zero if any flow fails."
+    end
+    versions = parser.parse(argv)
+
+    OmniAuth.config.logger = Logger.new(File::NULL)
+    OmniAuth.config.request_validation_phase = nil
+    OmniAuth.config.full_host = CALLBACK_HOST
+    OmniAuth.config.on_failure = lambda do |env|
+      error = env["omniauth.error"]
+      message = error ? "#{error.class}: #{error.message.lines.first&.strip}" : env["omniauth.error.type"].to_s
+      [500, {}, [message]]
+    end
+
+    results =
+      if opts[:site]
+        password = opts[:password] || ENV["ROCKETCHAT_PASSWORD"]
+        abort parser.help unless opts[:user] && password
+        run_flows(opts[:site], Flow.new(opts[:site], user: opts[:user], password: password))
+      else
+        abort parser.help if versions.empty?
+        versions.flat_map do |version|
+          instance = DockerInstance.new(version, **opts.slice(:mongo_image, :timeout, :keep))
+          log "Testing Rocket Chat #{version}"
+          instance.start
+          run_flows(version, Flow.new(instance.site, user: ADMIN_USER, password: ADMIN_PASSWORD))
+        rescue Error => e
+          [true, false].map { |pkce| Result.new(version, pkce, false, "setup: #{e.message}") }
+        ensure
+          instance&.stop
+        end
+      end
+
+    print_matrix(results)
+    exit(results.all?(&:ok) ? 0 : 1)
+  end
+end
+
+Compat.main(ARGV) if $PROGRAM_NAME == __FILE__

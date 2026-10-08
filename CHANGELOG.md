@@ -2,6 +2,9 @@
 
 ### Unreleased
 
+- Drops documented support for EOL Rocket Chat versions below 8.2.0.
+- Adds `bin/compat` to check compatibility against real Rocket Chat instances.
+
 ### 0.2.0 (2026-03-08)
 
 This release contains breaking changes. See [Upgrade Instructions](UPGRADE.md#version-02) for detailed upgrade instructions.
