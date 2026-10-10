@@ -2,8 +2,9 @@ name: Tests and Linting
 
 on:
   push:
-    branches-ignore:
-      - 'dependabot/**'
+    branches:
+      - main
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -32,3 +33,16 @@ jobs:
         run: bundle exec standardrb
       - name: Run specs
         run: bundle exec rspec spec
+
+  # Single check for the main branch ruleset to require, so the Ruby matrix can
+  # change without updating the ruleset.
+  all-ruby-versions:
+    runs-on: ubuntu-latest
+    name: All Ruby versions
+    needs: build
+    if: always()
+    steps:
+      - name: Check matrix result
+        run: test "$RESULT" = success
+        env:
+          RESULT: ${{ needs.build.result }}
