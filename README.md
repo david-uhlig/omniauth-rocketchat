@@ -181,7 +181,7 @@ After checking out the repo, run `bin/setup` to install dependencies. Then run `
 
 ### Compatibility Check
 
-`bin/compat` runs the full OAuth flow against real Rocket Chat instances: request phase, user consent, token exchange, and profile fetch. It tests both `pkce: true` and `pkce: false`, and prints a compatibility matrix. It exits non-zero if any flow fails.
+`bin/compat` runs the full OAuth flow against real Rocket Chat instances: request phase, user consent, token exchange, and profile fetch. It tests both `pkce: true` and `pkce: false`, and prints the result of each flow, a compatibility matrix and a plain-language summary. It exits non-zero if any flow fails.
 
 By default, it starts throwaway Docker containers (MongoDB and Rocket Chat) for each version you pass. It removes them afterwards. Versions are [`rocketchat/rocket.chat`](https://hub.docker.com/r/rocketchat/rocket.chat/tags) image tags. Docker is required.
 
@@ -191,6 +191,16 @@ bin/compat 8.2.0 8.9.0        # several versions, one matrix
 bin/compat --keep 8.9.0       # keep the containers running for debugging
 bin/compat --mongo mongo:7.0 8.2.0  # use another MongoDB image (default: mongo:8.2)
 ```
+
+You can also test unreleased code, e.g. to check whether an upstream fix works. The script uses the images Rocket Chat's CI publishes to `ghcr.io/rocketchat/rocket.chat`. These exist for the `develop` branch and for pull requests from branches of the [Rocket.Chat](https://github.com/RocketChat/Rocket.Chat) repository, not for pull requests from forks. The matrix shows the commit each image was built from.
+
+```sh
+bin/compat --pr 42686                  # a pull request
+bin/compat --ref develop               # a branch
+bin/compat 8.9.0 --ref develop         # mix with released versions in one matrix
+```
+
+Set `GITHUB_TOKEN` (or `GH_TOKEN`) if you hit GitHub's API rate limit.
 
 You can also test against an existing instance. The user needs permission to manage OAuth apps:
 
