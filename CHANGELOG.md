@@ -10,9 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Add `bin/compat` to check compatibility against real Rocket Chat instances.
 - `bin/compat --pr` and `--ref` check compatibility against a Rocket Chat pull request or branch.
+- `bin/compat --json` writes the results as JSON.
+- A scheduled workflow tests the latest release against all Rocket Chat releases that aren't EOL and updates the compatibility matrix in the README.
 
 ### Removed
-- Drop documented support for EOL Rocket Chat versions below 8.2.0.
+- Drop documented support for EOL Rocket Chat versions.
 
 ## [0.2.0] - 2026-03-08
 
