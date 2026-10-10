@@ -11,6 +11,7 @@
 #   bin/compat --pr 39465           # a Rocket Chat pull request
 #   bin/compat --ref develop        # a Rocket Chat branch
 #   bin/compat --site https://chat.example.com --user admin --password secret
+#   bin/compat --json results.json 8.9.0  # also write machine-readable results
 #
 # Run `bin/compat --help` for all options.
 
@@ -348,6 +349,7 @@ module Compat
       o.on("--mongo IMAGE", "MongoDB image (default: #{opts[:mongo_image]}). Older Rocket Chat versions may need an older one.") { opts[:mongo_image] = _1 }
       o.on("--timeout SECONDS", Integer, "Startup timeout per container (default: #{opts[:timeout]})") { opts[:timeout] = _1 }
       o.on("--keep", "Keep containers running after the test") { opts[:keep] = true }
+      o.on("--json FILE", "Also write the results as JSON to FILE") { opts[:json] = _1 }
       o.separator ""
       o.separator "Existing instance mode: the user needs permission to manage OAuth apps."
       o.on("--site URL", "Rocket Chat base URL") { opts[:site] = _1 }
@@ -397,6 +399,7 @@ module Compat
       end
 
     print_report(results)
+    File.write(opts[:json], JSON.pretty_generate(results.map(&:to_h))) if opts[:json]
     exit(results.all?(&:ok) ? 0 : 1)
   end
 end

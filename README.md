@@ -17,7 +17,7 @@ This unofficial [OmniAuth] strategy allows your application's users to authentic
 ## Requirements
 
 * Ruby `>= 3.2.0`.
-* Rocket Chat `>= 8.2.0`. See [Compatibility](#compatibility) below.
+* A Rocket Chat release that isn't [EOL](https://endoflife.date/rocket-chat). See [Compatibility](#compatibility) below.
 
 ### Compatibility
 
@@ -25,11 +25,15 @@ Rocket Chat [doesn't store the PKCE code challenge](https://github.com/RocketCha
 
 #### Compatibility Matrix
 
-| Rocket Chat Version | `pkce: false`      | `pkce: true` |
-|---------------------|--------------------|--------------|
-| `>= 8.2.0`          | :white_check_mark: | :x:          |
+<!-- compat-matrix:start -->
+Tested with omniauth-rocketchat `v0.2.0` against the first and the latest patch release of every Rocket Chat minor version that isn't [EOL](https://endoflife.date/rocket-chat). Minor versions show the result of their latest patch release. The first patch release is listed separately when it differs.
 
-Versions below 8.2.0 are EOL and not supported. Use [`bin/compat`](#compatibility-check) to check a specific version.
+| Rocket Chat Version | `pkce: false` | `pkce: true` |
+|---------------------|---------------|--------------|
+| `8.3` – `8.9` | :white_check_mark: | :x: |
+<!-- compat-matrix:end -->
+
+A [scheduled workflow](.github/workflows/compat.yml) keeps this matrix up to date. EOL versions are not supported. Use [`bin/compat`](#compatibility-check) to check a specific version.
 
 ## Installation
 
@@ -209,6 +213,8 @@ ROCKETCHAT_PASSWORD=secret bin/compat --site https://chat.example.com --user adm
 ```
 
 The script registers a temporary OAuth app with the redirect URL `http://localhost:4567/auth/rocketchat/callback` and deletes it afterwards. Run `bin/compat --help` for all options.
+
+Pass `--json FILE` to also write the results as JSON. Once a day, the [compatibility workflow](.github/workflows/compat.yml) uses it to test the latest release of this gem against the first and the latest patch release of every Rocket Chat minor version that isn't EOL. `bin/compat-matrix` caches the results per gem release and Rocket Chat version in [`.github/compat.json`](.github/compat.json), so each combination is tested only once. It then updates the [Compatibility Matrix](#compatibility-matrix) and opens a pull request. To retest a combination, delete its entry from the cache.
 
 ## Versioning
 

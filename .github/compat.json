@@ -1,0 +1,32 @@
+{
+  "v0.2.0": {
+    "8.3.8": {
+      "pkce": false,
+      "no_pkce": true
+    },
+    "8.4.6": {
+      "pkce": false,
+      "no_pkce": true
+    },
+    "8.5.3": {
+      "pkce": false,
+      "no_pkce": true
+    },
+    "8.6.2": {
+      "pkce": false,
+      "no_pkce": true
+    },
+    "8.7.1": {
+      "pkce": false,
+      "no_pkce": true
+    },
+    "8.8.1": {
+      "pkce": false,
+      "no_pkce": true
+    },
+    "8.9.0": {
+      "pkce": false,
+      "no_pkce": true
+    }
+  }
+}

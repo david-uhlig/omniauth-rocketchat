@@ -1,0 +1,183 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Maintains the README's compatibility matrix: the latest release of this gem
+# against every Rocket Chat release that isn't EOL. Results of `bin/compat` are
+# cached per gem tag and Rocket Chat version in .github/compat.json, so each
+# combination is tested once.
+#
+# Usage:
+#   bin/compat-matrix plan                       # untested Rocket Chat versions, as GitHub Actions outputs
+#   bin/compat-matrix update [RESULTS.json...]   # merge `bin/compat --json` results, drop EOL versions,
+#                                                # and rewrite the README's matrix
+#
+# Used by .github/workflows/compat.yml.
+
+require "json"
+require "net/http"
+require "optparse"
+require "uri"
+
+module CompatMatrix
+  ROOT = File.expand_path("..", __dir__)
+  CACHE = File.join(ROOT, ".github/compat.json")
+  README = File.join(ROOT, "README.md")
+  MARKERS = ["<!-- compat-matrix:start -->", "<!-- compat-matrix:end -->"].freeze
+  DOCKER_TAGS = "https://hub.docker.com/v2/repositories/rocketchat/rocket.chat/tags"
+  END_OF_LIFE = "https://endoflife.date/api/v1/products/rocket-chat"
+
+  class Error < StandardError; end
+
+  def self.log(msg) = warn("==> #{msg}")
+
+  def self.version(string) = Gem::Version.new(string.delete_prefix("v"))
+
+  def self.get_json(url)
+    res = Net::HTTP.get_response(URI(url))
+    raise Error, "GET #{url}: HTTP #{res.code}" unless res.is_a?(Net::HTTPSuccess)
+
+    JSON.parse(res.body)
+  end
+
+  # The first and the latest patch release (rocketchat/rocket.chat image tags) of
+  # all minor releases that aren't EOL, oldest first. Patch releases in between
+  # aren't tested.
+  def self.supported_versions
+    releases = get_json(END_OF_LIFE).dig("result", "releases")
+    minors = releases.reject { _1["isEol"] }.map { _1["name"] }
+    raise Error, "endoflife.date lists no supported Rocket Chat releases" if minors.empty?
+
+    # endoflife.date lags behind new releases, so look for newer ones on Docker Hub
+    latest = releases.map { version(_1["name"]) }.max
+    loop do
+      major, minor = latest.segments
+      newer = ["#{major}.#{minor + 1}", "#{major + 1}.0"].find { image_tags(_1).any? } or break
+      minors << newer
+      latest = version(newer)
+    end
+
+    minors.flat_map { |minor| image_tags(minor).minmax_by { version(_1) }.uniq }.compact.sort_by { version(_1) }
+  end
+
+  # Image tags of the patch releases of a minor release, e.g. 8.9 => ["8.9.0", "8.9.1"].
+  # Release candidates and other variants (8.9.0-rc.1, 8.9.0-fips) are skipped.
+  def self.image_tags(minor)
+    @image_tags ||= {}
+    @image_tags[minor] ||= begin
+      tags = []
+      url = "#{DOCKER_TAGS}?page_size=100&name=#{minor}."
+      while url
+        page = get_json(url)
+        tags.concat(page["results"].map { _1["name"] })
+        url = page["next"]
+      end
+      tags.grep(/\A#{Regexp.escape(minor)}\.\d+\z/)
+    end
+  end
+
+  def self.latest_tag
+    tag = IO.popen(%w[git tag --list v* --sort=-v:refname], chdir: ROOT, &:read).lines.first&.strip
+    tag or raise Error, "No v* tag found"
+  end
+
+  def self.load_cache = File.exist?(CACHE) ? JSON.parse(File.read(CACHE)) : {}
+
+  def self.save_cache(cache)
+    sorted = cache.sort_by { |tag, _| version(tag) }.to_h do |tag, results|
+      [tag, results.sort_by { |v, _| version(v) }.to_h]
+    end
+    File.write(CACHE, JSON.pretty_generate(sorted) + "\n")
+  end
+
+  def self.plan(tag)
+    tested = load_cache.fetch(tag, {}).keys
+    untested = supported_versions - tested
+    log "#{untested.size} untested Rocket Chat versions for #{tag}: #{untested.join(" ")}"
+    puts "tag=#{tag}"
+    puts "versions=#{untested.to_json}"
+  end
+
+  def self.update(tag, files)
+    cache = load_cache
+    files.each do |file|
+      JSON.parse(File.read(file)).group_by { _1["target"] }.each do |target, rows|
+        if rows.any? { _1["detail"].start_with?("setup: ") }
+          log "Not caching #{target}, it could not be set up: #{rows.first["detail"].lines.first.strip}"
+          next
+        end
+
+        by_pkce = rows.to_h { [_1["pkce"], _1["ok"]] }
+        (cache[tag] ||= {})[target] = {"pkce" => by_pkce.fetch(true), "no_pkce" => by_pkce.fetch(false)}
+      end
+    end
+
+    supported = supported_versions
+    cache.each_value { |results| results.select! { |v, _| supported.include?(v) } }
+    cache.reject! { |_, results| results.empty? }
+    save_cache(cache)
+
+    readme = File.read(README)
+    start, finish = MARKERS.map { readme.index(_1) or raise Error, "#{_1} missing in README.md" }
+    section = "#{MARKERS[0]}\n#{render(tag, cache.fetch(tag, {}), supported)}#{MARKERS[1]}"
+    File.write(README, readme[0...start] + section + readme[(finish + MARKERS[1].size)..])
+  end
+
+  def self.render(tag, results, supported)
+    rows = matrix_rows(results, supported)
+    cell = ->(ok) { ok ? ":white_check_mark:" : ":x:" }
+    <<~MD
+      Tested with omniauth-rocketchat `#{tag}` against the first and the latest patch release of every Rocket Chat minor version that isn't [EOL](https://endoflife.date/rocket-chat). Minor versions show the result of their latest patch release. The first patch release is listed separately when it differs.
+
+      | Rocket Chat Version | `pkce: false` | `pkce: true` |
+      |---------------------|---------------|--------------|
+      #{rows.map { |label, r| "| #{label} | #{cell[r["no_pkce"]]} | #{cell[r["pkce"]]} |" }.join("\n")}
+    MD
+  end
+
+  # Consecutive minor versions with the same result share a row, e.g. `8.3` - `8.9`.
+  # Other patch versions get their own row when they differ from the latest.
+  def self.matrix_rows(results, supported)
+    ranges = []
+    patches = []
+    previous = nil
+    supported.group_by { _1[/\A\d+\.\d+/] }.each do |minor, versions|
+      tested = versions.select { results.key?(_1) }
+      if tested.empty?
+        previous = nil
+        next
+      end
+
+      result = results[tested.last]
+      tested.each { patches << [_1, _1, results[_1]] if results[_1] != result }
+      if previous && previous[2] == result
+        previous[1] = minor
+      else
+        ranges << (previous = [minor, minor, result])
+      end
+    end
+
+    (ranges + patches).sort_by { version(_1[0]) }.map do |first, last, result|
+      [(first == last) ? "`#{first}`" : "`#{first}` – `#{last}`", result]
+    end
+  end
+
+  def self.main(argv)
+    tag = nil
+    parser = OptionParser.new do |o|
+      o.banner = "Usage: bin/compat-matrix plan | update [RESULTS.json...]"
+      o.on("--tag TAG", "Gem release to test (default: latest v* tag)") { tag = _1 }
+    end
+    command, *files = parser.parse(argv)
+    tag ||= latest_tag
+
+    case command
+    when "plan" then plan(tag)
+    when "update" then update(tag, files)
+    else abort parser.help
+    end
+  rescue Error => e
+    abort e.message
+  end
+end
+
+CompatMatrix.main(ARGV) if $PROGRAM_NAME == __FILE__
