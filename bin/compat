@@ -8,6 +8,8 @@
 #
 # Usage:
 #   bin/compat 8.9.0 7.3.0          # throwaway Docker containers per version
+#   bin/compat --pr 39465           # a Rocket Chat pull request
+#   bin/compat --ref develop        # a Rocket Chat branch
 #   bin/compat --site https://chat.example.com --user admin --password secret
 #
 # Run `bin/compat --help` for all options.
@@ -32,16 +34,94 @@ module Compat
 
   class Error < StandardError; end
 
+  def self.sh(*cmd)
+    out = IO.popen(cmd, err: [:child, :out], &:read)
+    raise Error, "Command failed: #{cmd.join(" ")}\n#{out}" unless $?.success?
+
+    out
+  end
+
+  # Minimal GitHub REST client. Set GITHUB_TOKEN or GH_TOKEN to raise the rate limit.
+  class GitHub
+    def initialize(repo)
+      @repo = repo
+    end
+
+    def get(path)
+      uri = URI("https://api.github.com/repos/#{@repo}#{path}")
+      req = Net::HTTP::Get.new(uri, "Accept" => "application/vnd.github+json")
+      token = ENV["GITHUB_TOKEN"] || ENV["GH_TOKEN"]
+      req["Authorization"] = "Bearer #{token}" if token
+      res = Net::HTTP.start(uri.host, uri.port, use_ssl: true) { |http| http.request(req) }
+      body = JSON.parse(res.body)
+      raise Error, "GitHub #{@repo}#{path}: HTTP #{res.code} #{body["message"]}" unless res.is_a?(Net::HTTPSuccess)
+
+      body
+    rescue JSON::ParserError
+      raise Error, "GitHub #{@repo}#{path}: HTTP #{res.code}"
+    end
+  end
+
+  # Finds the image Rocket Chat's CI published to ghcr.io for a pull request or branch. CI publishes
+  # images for `develop` and for pull requests from branches of the main repository, not for pull
+  # requests from forks or individual commits.
+  class PublishedImage
+    NOT_PUBLISHED = "Rocket Chat's CI publishes images only for develop and pull requests from its own repository."
+
+    attr_reader :label
+
+    def initialize(kind, value, repo:)
+      @kind = kind
+      @value = value
+      @repo = repo
+      @github = GitHub.new(repo)
+      @label = (kind == :pr) ? "PR ##{value}" : value
+    end
+
+    def image
+      tag, head_sha = resolve
+      image = "ghcr.io/#{@repo.split("/").first.downcase}/rocket.chat:#{tag}"
+      index = IO.popen(["docker", "buildx", "imagetools", "inspect", "--raw", image], err: File::NULL, &:read)
+      raise Error, "No published image #{image}. #{NOT_PUBLISHED}" unless $?.success?
+
+      # The image is annotated with the CI run that built it, which tells the commit
+      run_id = index[%r{/actions/runs/(\d+)}, 1]
+      if run_id
+        sha = @github.get("/actions/runs/#{run_id}")["head_sha"]
+        @label = "#{@label} @ #{sha[0, 7]}"
+        Compat.log "#{image} was built from #{sha[0, 7]}, not the latest commit #{head_sha[0, 7]}" if sha != head_sha
+      end
+      image
+    end
+
+    private
+
+    # Returns the image tag and the current head commit.
+    def resolve
+      if @kind == :pr
+        pr = @github.get("/pulls/#{@value}")
+        if pr.dig("head", "repo", "full_name") != @repo
+          raise Error, "PR ##{@value} is from a fork (#{pr.dig("head", "repo", "full_name")}). #{NOT_PUBLISHED}"
+        end
+
+        ["pr-#{@value}", pr.dig("head", "sha")]
+      else
+        [@value.tr("/", "-"), @github.get("/commits/#{URI.encode_www_form_component(@value)}")["sha"]]
+      end
+    end
+  end
+
   # Starts MongoDB and Rocket Chat containers on a private network.
   class DockerInstance
     attr_reader :site
 
-    def initialize(version, mongo_image:, timeout:, keep:)
-      @version = version
+    def initialize(image, label:, mongo_image:, timeout:, keep:)
+      @image = image
+      @label = label
       @mongo_image = mongo_image
       @timeout = timeout
       @keep = keep
-      @prefix = "omniauth-rc-compat-#{version.tr(".", "-")}-#{SecureRandom.hex(3)}"
+      @prefix = "omniauth-rc-compat-#{label.downcase.gsub(/[^a-z0-9]+/, "-")}-#{SecureRandom.hex(3)}"
     end
 
     def start
@@ -67,7 +147,7 @@ module Compat
         "-e", "OVERWRITE_SETTING_Show_Setup_Wizard=completed",
         "-e", "ADMIN_USERNAME=#{ADMIN_USER}", "-e", "ADMIN_PASS=#{ADMIN_PASSWORD}",
         "-e", "ADMIN_EMAIL=#{ADMIN_USER}@example.com",
-        "rocketchat/rocket.chat:#{@version}"
+        @image
       wait_for_app
 
       # On first boot against an empty database, some versions (e.g. 7.x) re-create
@@ -102,7 +182,7 @@ module Compat
     end
 
     def wait_for_app
-      wait_for("Rocket Chat #{@version}") do
+      wait_for("Rocket Chat #{@label}") do
         abort_if_exited
         Net::HTTP.get_response(URI("#{@site}/api/info")).is_a?(Net::HTTPSuccess)
       rescue SystemCallError, IOError
@@ -127,12 +207,7 @@ module Compat
       end
     end
 
-    def sh(*cmd)
-      out = IO.popen(cmd, err: [:child, :out], &:read)
-      raise Error, "Command failed: #{cmd.join(" ")}\n#{out}" unless $?.success?
-
-      out
-    end
+    def sh(*cmd) = Compat.sh(*cmd)
   end
 
   # Drives the OAuth flow through the strategy against a running instance.
@@ -227,7 +302,9 @@ module Compat
     end
   end
 
-  def self.print_matrix(results)
+  def self.print_report(results)
+    puts
+    results.each { |r| puts "#{r.target} pkce=#{r.pkce}: #{r.ok ? "OK" : "FAIL"} - #{r.detail}" }
     puts
     puts "| Rocket Chat | `pkce: true` | `pkce: false` |"
     puts "|-------------|--------------|---------------|"
@@ -236,16 +313,38 @@ module Compat
       puts "| `#{target}` | #{by_pkce[true]} | #{by_pkce[false]} |"
     end
     puts
-    results.each { |r| puts "#{r.target} pkce=#{r.pkce}: #{r.ok ? "OK" : "FAIL"} - #{r.detail}" }
+    puts "Summary:"
+    results.group_by(&:target).each { |target, rows| puts "  #{target}: #{summarize(rows)}" }
+  end
+
+  def self.summarize(rows)
+    pkce, no_pkce = [true, false].map { |pkce| rows.find { |r| r.pkce == pkce } }
+    if pkce.ok && no_pkce.ok
+      "works, with and without PKCE."
+    elsif no_pkce.ok
+      "works only with `pkce: false`, login with PKCE fails."
+    elsif pkce.ok
+      "works only with `pkce: true`, login without PKCE fails."
+    elsif (setup = rows.map(&:detail).find { _1.start_with?("setup: ") })
+      "could not be tested: #{setup.delete_prefix("setup: ").lines.first.strip}"
+    else
+      "login fails, with and without PKCE."
+    end
   end
 
   def self.main(argv)
-    opts = {mongo_image: "mongo:8.2", timeout: 300, keep: false}
+    opts = {mongo_image: "mongo:8.2", timeout: 300, keep: false, repo: "RocketChat/Rocket.Chat"}
+    sources = []
     parser = OptionParser.new do |o|
-      o.banner = "Usage: bin/compat [options] VERSION [VERSION...]\n" \
+      o.banner = "Usage: bin/compat [options] [VERSION...] [--pr NUMBER...] [--ref REF...]\n" \
                  "       bin/compat --site URL --user USER --password PASSWORD"
       o.separator ""
-      o.separator "Docker mode (default): starts throwaway containers for each rocketchat/rocket.chat image tag."
+      o.separator "Docker mode (default): starts throwaway containers for each rocketchat/rocket.chat image tag,"
+      o.separator "pull request and branch. Pull requests and branches use the images Rocket Chat's CI publishes"
+      o.separator "to ghcr.io, which exist for develop and pull requests from its own repository, not from forks."
+      o.on("--pr NUMBER", "Test a Rocket Chat pull request (repeatable)") { sources << [:pr, _1] }
+      o.on("--ref BRANCH", "Test a Rocket Chat branch, e.g. develop (repeatable)") { sources << [:ref, _1] }
+      o.on("--repo OWNER/NAME", "Repository for --pr and --ref (default: #{opts[:repo]})") { opts[:repo] = _1 }
       o.on("--mongo IMAGE", "MongoDB image (default: #{opts[:mongo_image]}). Older Rocket Chat versions may need an older one.") { opts[:mongo_image] = _1 }
       o.on("--timeout SECONDS", Integer, "Startup timeout per container (default: #{opts[:timeout]})") { opts[:timeout] = _1 }
       o.on("--keep", "Keep containers running after the test") { opts[:keep] = true }
@@ -275,20 +374,29 @@ module Compat
         abort parser.help unless opts[:user] && password
         run_flows(opts[:site], Flow.new(opts[:site], user: opts[:user], password: password))
       else
-        abort parser.help if versions.empty?
-        versions.flat_map do |version|
-          instance = DockerInstance.new(version, **opts.slice(:mongo_image, :timeout, :keep))
-          log "Testing Rocket Chat #{version}"
+        targets = versions.map { [:version, _1] } + sources
+        abort parser.help if targets.empty?
+        targets.flat_map do |kind, value|
+          label = value
+          log "Testing Rocket Chat #{(kind == :pr) ? "PR ##{value}" : value}"
+          image =
+            if kind == :version
+              "rocketchat/rocket.chat:#{value}"
+            else
+              source = PublishedImage.new(kind, value, repo: opts[:repo])
+              source.image.tap { label = source.label }
+            end
+          instance = DockerInstance.new(image, label: label, **opts.slice(:mongo_image, :timeout, :keep))
           instance.start
-          run_flows(version, Flow.new(instance.site, user: ADMIN_USER, password: ADMIN_PASSWORD))
+          run_flows(label, Flow.new(instance.site, user: ADMIN_USER, password: ADMIN_PASSWORD))
         rescue Error => e
-          [true, false].map { |pkce| Result.new(version, pkce, false, "setup: #{e.message}") }
+          [true, false].map { |pkce| Result.new(source&.label || label, pkce, false, "setup: #{e.message}") }
         ensure
           instance&.stop
         end
       end
 
-    print_matrix(results)
+    print_report(results)
     exit(results.all?(&:ok) ? 0 : 1)
   end
 end
