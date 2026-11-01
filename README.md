@@ -30,7 +30,7 @@ Tested with omniauth-rocketchat `v0.2.0` against the first and the latest patch 
 
 | Rocket Chat Version | `pkce: false` | `pkce: true` |
 |---------------------|---------------|--------------|
-| `8.3` – `8.9` | :white_check_mark: | :x: |
+| `8.5` – `8.9` | :white_check_mark: | :x: |
 <!-- compat-matrix:end -->
 
 A [scheduled workflow](.github/workflows/compat.yml) keeps this matrix up to date. EOL versions are not supported. Use [`bin/compat`](#compatibility-check) to check a specific version.
