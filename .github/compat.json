@@ -4,7 +4,7 @@
       "pkce": false,
       "no_pkce": true
     },
-    "8.5.4": {
+    "8.5.5": {
       "pkce": false,
       "no_pkce": true
     },
@@ -12,7 +12,7 @@
       "pkce": false,
       "no_pkce": true
     },
-    "8.6.3": {
+    "8.6.4": {
       "pkce": false,
       "no_pkce": true
     },
@@ -28,11 +28,15 @@
       "pkce": false,
       "no_pkce": true
     },
-    "8.8.1": {
+    "8.8.2": {
       "pkce": false,
       "no_pkce": true
     },
     "8.9.0": {
+      "pkce": false,
+      "no_pkce": true
+    },
+    "8.9.1": {
       "pkce": false,
       "no_pkce": true
     }
